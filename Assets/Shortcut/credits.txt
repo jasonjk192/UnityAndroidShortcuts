@@ -1,0 +1,4 @@
+present: https://openclipart.org/detail/301747/present-2
+icons: https://fonts.google.com/icons
+
+Apache license: https://www.apache.org/licenses/LICENSE-2.0.html
