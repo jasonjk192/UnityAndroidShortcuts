@@ -7,19 +7,21 @@ namespace WC.Shortcuts
     public enum ShortcutTriggerType { NONE, COLDSTART, BACKGROUND };
 
     /// <summary>
-    /// API for Android to manage shortcuts.
+    /// API for Unity to communicate with Android to manage shortcuts.
     /// <para>Only 1 instance of this manager is expected</para>
     /// </summary>
+    [DisallowMultipleComponent]
     public class ShortcutManager : MonoBehaviour
     {
-        public static ShortcutManager instance { get; private set; }
+        /// <summary>Ensures that a single instance is available</summary>
+        public static ShortcutManager instance { get; private set; } = null;
 
         /// <summary>Unity player's activity context</summary>
-        public static AndroidJavaObject androidContext { get; private set; }
+        public static AndroidJavaObject androidContext { get; private set; } = null;
         /// <summary>API's shortcut class in android plugin</summary>
-        public static AndroidJavaClass androidShortcutManagerClass { get; private set; }
+        public static AndroidJavaClass androidShortcutManagerClass { get; private set; } = null;
         /// <summary>Current detected main activity</summary>
-        public static string mainActivity {  get; private set; }
+        public static string mainActivity { get; private set; } = "";
 
         private static bool _isAppFirstLaunch = true;
 
@@ -33,13 +35,18 @@ namespace WC.Shortcuts
         {
             if(instance == null) instance = this;
             else { Debug.LogError($"{_debugPrefix} Another ShortcutManager instance was detected!"); return; }
+            DontDestroyOnLoad(gameObject);
 
-#if UNITY_ANDROID
+#if UNITY_EDITOR
+            Debug.Log($"{_debugPrefix} Cannot initialize ShortcutManager in Editor. Please run the app on a device!");
+#elif UNITY_ANDROID
             androidContext = GetContext();
             androidShortcutManagerClass = new("com.wintercrestal.shortcut.WCShortcutManager");
             mainActivity = GetMainActivity(androidContext);
 
             AndroidJNIHelper.debug = _debugAndroidJNIHelper;
+#else
+            Debug.Log($"{_debugPrefix} Unsupported platform!");
 #endif
         }
 
@@ -80,9 +87,18 @@ namespace WC.Shortcuts
         public static void CreateShortcut(ShortcutData shortcutData)
         {
 #if UNITY_EDITOR
+            if (shortcutData.icon != null)
+            {
+                var iconTexture = shortcutData.icon.texture;
+                if (!iconTexture.isReadable) Debug.LogWarning($"{_debugPrefix} Icon is not readable. Please change it in import settings");
+                if (!IsTextureUncompressedFormat(iconTexture)) Debug.LogWarning($"{_debugPrefix} Icon is compressed. Make sure to change it in import settings.");
+            }
+
             Debug.Log($"{_debugPrefix} Cannot create shortcuts in the editor!");
 #elif UNITY_ANDROID
             CreateShortcutPrivate(shortcutData);
+#else
+            Debug.Log($"{_debugPrefix} Unsupported platform!");
 #endif
         }
 
@@ -94,6 +110,23 @@ namespace WC.Shortcuts
             Debug.Log($"{_debugPrefix} Cannot remove shortcuts in the editor!");
 #elif UNITY_ANDROID
             RemoveShortcutPrivate(shortcutID);
+#else
+            Debug.Log($"{_debugPrefix} Unsupported platform!");
+#endif
+        }
+
+        /// <summary>Checks if the given shortcut ID exists</summary>
+        /// <param name="shortcutID">The shortcut's ID to check if it exists</param>
+        public static bool HasShortcut(string shortcutID)
+        {
+#if UNITY_EDITOR
+            Debug.Log($"{_debugPrefix} Shortcuts are not supported in Editor!");
+            return false;
+#elif UNITY_ANDROID
+            return HasDynamicShortcutIDPrivate(shortcutID);
+#else
+            Debug.Log($"{_debugPrefix} Unsupported platform!");
+            return false;
 #endif
         }
 
@@ -106,6 +139,9 @@ namespace WC.Shortcuts
                 return 0;
 #elif UNITY_ANDROID
                 return GetDynamicShortcutCountPrivate();
+#else
+                Debug.Log($"{_debugPrefix} Unsupported platform!");
+                return 0;
 #endif
             }
         }
@@ -119,6 +155,9 @@ namespace WC.Shortcuts
                 return null;
 #elif UNITY_ANDROID
                 return GetDynamicShortcutIDsPrivate();
+#else
+                Debug.Log($"{_debugPrefix} Unsupported platform!");
+                return null;
 #endif
             }
         }
@@ -170,12 +209,18 @@ namespace WC.Shortcuts
             return androidShortcutManagerClass.CallStatic<string[]>("GetDynamicShortcutIDs", androidContext);
         }
 
+        private static bool HasDynamicShortcutIDPrivate(string shortcutID)
+        {
+            return androidShortcutManagerClass.CallStatic<bool>("HasDynamicShortcutID", androidContext, shortcutID);
+        }
+
         private void MonitorIntent(ShortcutTriggerType triggerType)
         {
             AndroidJavaObject intent = androidContext.Call<AndroidJavaObject>("getIntent");
             if (intent.Call<bool>("hasExtra", "shortcut_ID"))
             {
                 string action = intent.Call<string>("getStringExtra", "shortcut_ID");
+                intent.Call("removeExtra", "shortcut_ID");
                 OnShortcutTriggered?.Invoke(action, triggerType);
             }
         }
