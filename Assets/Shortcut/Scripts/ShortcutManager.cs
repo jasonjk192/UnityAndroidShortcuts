@@ -13,7 +13,7 @@ namespace WC.Shortcuts
     [DisallowMultipleComponent]
     public class ShortcutManager : MonoBehaviour
     {
-        /// <summary>Ensures that a single instance is available</summary>
+        /// <summary>Ensures that only a single instance is available</summary>
         public static ShortcutManager instance { get; private set; } = null;
 
         /// <summary>Unity player's activity context</summary>
@@ -23,13 +23,20 @@ namespace WC.Shortcuts
         /// <summary>Current detected main activity</summary>
         public static string mainActivity { get; private set; } = "";
 
-        private static bool _isAppFirstLaunch = true;
+        private static bool _isAppFirstLaunch = true; // OnApplicationPause() is also called on first launch (cold start)
 
         [Space, Header("Debug")]
         [SerializeField] private bool _debugAndroidJNIHelper = false;
         private static readonly string _debugPrefix = "[ShortcutManager]";
 
+        /// <summary>UnityAction event that handles shortcut. It sends the shortcut's ID and the trigger type.
+        /// <remark>Due to it's static nature, it is preferred to have a hook on this as early as possible (And useful for simulating in Editor)</remark></summary>
         public static UnityAction<string, ShortcutTriggerType> OnShortcutTriggered;
+
+#if UNITY_EDITOR
+        [HideInInspector] public bool simulateColdStart = false;
+        [HideInInspector] public string simulationShortcutID = ""; // Not exposed as a string in the editor
+#endif
 
         private void Awake()
         {
@@ -53,7 +60,13 @@ namespace WC.Shortcuts
         private void Start()
         {
 #if UNITY_EDITOR
-            Debug.Log($"{_debugPrefix} Shortcuts are not supported in Editor. Please run the app on a device!");
+            // We simulate in Start() to allow other GameObjects to finish their initialization in Awake()
+            if (simulateColdStart)
+            {
+                Simulate(simulationShortcutID, ShortcutTriggerType.COLDSTART);
+            }
+            else
+                Debug.Log($"{_debugPrefix} Shortcuts are not supported in Editor. Please run the app on a device!");
 
 #elif UNITY_ANDROID
             MonitorIntent(ShortcutTriggerType.COLDSTART);
@@ -79,6 +92,30 @@ namespace WC.Shortcuts
             if (instance == this) instance = null;
             else Debug.LogError($"{_debugPrefix} Another ShortcutManager instance was detected!");
         }
+
+        #region EDITOR_ONLY_API
+
+#if UNITY_EDITOR
+        /// <summary>[Editor only] Checks if the id is valid.</summary>
+        public bool hasIDForSimulation => !(simulationShortcutID.Equals("none", System.StringComparison.OrdinalIgnoreCase) || simulationShortcutID.Equals(""));
+
+        /// <summary>[Editor only] Simulate a Shortcut trigger.
+        /// <para>This is for testing within the editor but it is not ALWAYS guaranteed to be a replica. It is advised to test the triggers in an actual device</para></summary>
+        public void Simulate(string shortcutID, ShortcutTriggerType triggerType)
+        {
+            if (hasIDForSimulation)
+            {
+                Debug.Log($"{_debugPrefix} Simulating: <b>'{simulationShortcutID}'</b> with trigger type <b>'{triggerType.ToString()}'</b> in Editor");
+                OnShortcutTriggered?.Invoke(shortcutID, triggerType);
+            }
+            else
+            {
+                Debug.Log($"{_debugPrefix} Could not simulate as the shortcut ID is 'none'");
+            }
+        }
+#endif
+
+        #endregion
 
         #region PUBLIC_API
 
@@ -170,6 +207,12 @@ namespace WC.Shortcuts
 
         private static void CreateShortcutPrivate(ShortcutData shortcutData)
         {
+            if(HasDynamicShortcutIDPrivate(shortcutData.id))
+            {
+                Debug.Log($"{_debugPrefix} A shortcut with ID '{shortcutData.id}' already exists. Cannot create shortcut.");
+                return;
+            }
+
             if(shortcutData.systemIcon != ShortcutSystemIcons.NONE)
             {
                 androidShortcutManagerClass.CallStatic("CreateDynamicShortcut", androidContext, mainActivity, shortcutData.id, shortcutData.shortLabel, shortcutData.longLabel, shortcutData.systemIcon.ToString());
